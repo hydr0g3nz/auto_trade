@@ -224,9 +224,13 @@ dependencies = [
  "cargo-audit",
  "dotenv",
  "env_logger",
+ "futures-util",
  "hyper 0.14.32",
+ "hyper-tls",
  "log",
  "rust_decimal_macros",
+ "serde",
+ "serde_json",
  "tokio",
  "tower 0.4.13",
 ]

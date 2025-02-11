@@ -1,35 +1,37 @@
+use std::time::Duration;
+
 mod domain;
 use crate::domain::*;
+mod dto;
+use crate::dto::*;
 
 use binance_spot_connector_rust::{
     http::Credentials,
     hyper::{BinanceHttpClient, Error},
+    market::klines::KlineInterval,
+    market_stream::kline::KlineStream,
+    tokio_tungstenite::BinanceWebSocketClient,
     wallet::{self, account_status},
 };
 
-use hyper::client::connect::Connect;
-
 use env_logger::Builder;
-
-pub struct BinanceExchangeClient<T>
-where
-    T: Connect + Clone + Send + Sync + 'static,
-{
+use futures_util::StreamExt;
+use hyper::client::connect::Connect;
+use hyper::client::HttpConnector;
+use hyper_tls::HttpsConnector;
+pub struct BinanceExchangeClient {
     connected: bool,
     balance: f64,
     credentials: Credentials,
-    client: BinanceHttpClient<T>,
+    client: BinanceHttpClient<HttpsConnector<HttpConnector>>,
 }
-impl<T> BinanceExchangeClient<T>
-where
-    T: Connect + Clone + Send + Sync + 'static,
-{
+impl BinanceExchangeClient {
     pub fn new(credentials: Credentials) -> Self {
         BinanceExchangeClient {
             connected: false,
             balance: 0.0,
-            credentials,
-            client: BinanceHttpClient::default().credentials(credentials.clone()),
+            credentials: credentials.clone(),
+            client: BinanceHttpClient::default().credentials(credentials),
         }
     }
     pub async fn account_status(&self) -> Result<String, Error> {
@@ -53,12 +55,50 @@ where
         log::info!("{}", data);
         Ok(data)
     }
+    pub async fn get_market_data(&self) {
+        // Establish connection
+        let (mut conn, _) = BinanceWebSocketClient::connect_async_default()
+            .await
+            .expect("Failed to connect");
+        // Subscribe to streams
+        conn.subscribe(vec![
+            &KlineStream::new("BTCUSDT", KlineInterval::Minutes1).into()
+        ])
+        .await;
+        // Start a timer for 10 seconds
+        // let timer = tokio::time::Instant::now();
+        // let duration = Duration::new(10, 0);
+        // Read messages
+        while let Some(message) = conn.as_mut().next().await {
+            // if timer.elapsed() >= duration {
+            //     log::info!("10 seconds elapsed, exiting loop.");
+            //     break; // Exit the loop after 10 seconds
+            // }
+            match message {
+                Ok(message) => {
+                    let binary_data = message.into_data();
+                    let data = std::str::from_utf8(&binary_data).expect("Failed to parse message");
+                    match parse_websocket_message(data) {
+                        Ok(response) => {
+                            log::info!(
+                                "Received kline data for {}: Open: {}, Close: {}",
+                                response.data.symbol,
+                                response.data.kline.open_price,
+                                response.data.kline.close_price,
+                            );
+                        }
+                        Err(e) => log::error!("Failed to parse JSON: {} raw data: {}", e, data),
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // Disconnect
+        conn.close().await.expect("Failed to disconnect");
+    }
 }
 
-impl ExchangeClient for BinanceExchangeClient<T>
-where
-    T: Connect + Clone + Send + Sync + 'static,
-{
+impl ExchangeClient for BinanceExchangeClient {
     async fn connect(&mut self) -> Result<(), TradingError> {
         if let Ok(data) = self.account_status().await {
             // Ok(())
@@ -115,7 +155,7 @@ async fn main() {
     let mut client = BinanceExchangeClient::new(credentials);
 
     client.connect().await.unwrap();
-
+    client.get_market_data().await;
     let order = Order {
         symbol: "BTC/USD".to_string(),
         quantity: 1.0,
