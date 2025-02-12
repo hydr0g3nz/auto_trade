@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 mod domain;
@@ -28,6 +30,7 @@ pub struct BinanceExchangeClient {
     balance: f64,
     credentials: Credentials,
     client: BinanceHttpClient<HttpsConnector<HttpConnector>>,
+    market_data: MarketData,
 }
 impl BinanceExchangeClient {
     pub fn new(credentials: Credentials) -> Self {
@@ -36,6 +39,14 @@ impl BinanceExchangeClient {
             balance: 0.0,
             credentials: credentials.clone(),
             client: BinanceHttpClient::default().credentials(credentials),
+            market_data: MarketData::default(),
+        }
+    }
+    pub async fn start(&mut self) -> Result<(), Error> {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            log::info!("Current market data: {:?}", self.market_data);
         }
     }
     pub async fn account_status(&self) -> Result<String, Error> {
@@ -59,36 +70,92 @@ impl BinanceExchangeClient {
         log::info!("{}", data);
         Ok(data)
     }
-    pub async fn process_kline_data(mut receiver: mpsc::Receiver<Kline>) {
-        while let Some(kline) = receiver.recv().await {
-            println!(
-                "Kline Update - Symbol: {}, Open: {}, Close: {}",
-                kline.symbol, kline.open_price, kline.close_price
-            );
-            // Add your kline data processing logic here
+    fn update_market_state(&mut self, kline: &Kline) {
+        self.market_data = MarketData {
+            symbol: kline.symbol.clone(),
+            open_price: kline.open_price.parse().unwrap_or_default(),
+            close_price: kline.close_price.parse().unwrap_or_default(),
+            high_price: kline.high_price.parse().unwrap_or_default(),
+            low_price: kline.low_price.parse().unwrap_or_default(),
+            ..self.market_data
+        };
+    }
+
+    fn update_ticker_state(&mut self, ticker: &TickerData) {
+        self.market_data = MarketData {
+            symbol: ticker.symbol.clone(),
+            last_price: ticker.last_price.parse().unwrap_or_default(),
+            ..self.market_data
         }
     }
 
-    pub async fn process_ticker_data(mut receiver: mpsc::Receiver<TickerData>) {
-        while let Some(ticker) = receiver.recv().await {
-            println!(
-                "Ticker Update - Symbol: {}, Last: {}, Bid: {}, Ask: {}",
-                ticker.symbol, ticker.last_price, ticker.bid_price, ticker.ask_price
-            );
-            // Add your ticker data processing logic here
-        }
-    }
-    pub async fn get_all_market_data(&self) {
+    // แล้วใน get_all_market_data จะเรียกใช้แบบนี้:
+    pub async fn get_all_market_data(&mut self) {
         let (kline_tx, kline_rx) = mpsc::channel(100);
         let (ticker_tx, ticker_rx) = mpsc::channel(100);
-        // Create two separate tasks for kline and ticker data
+
+        let market_data = Arc::new(Mutex::new(self.market_data.clone()));
+        let market_data_kline = market_data.clone();
+        let market_data_ticker = market_data.clone();
+
         let kline_handle = tokio::spawn(get_kline_data(kline_tx));
-        let ticker_handle = tokio::spawn(get_ticker_data( ticker_tx));
-        // Spawn data processing tasks
-        let kline_process = tokio::spawn(Self::process_kline_data(kline_rx));
-        let ticker_process = tokio::spawn(Self::process_ticker_data(ticker_rx));
-        // Wait for both tasks to complete
-        let _ = join!(kline_handle, ticker_handle);
+        let ticker_handle = tokio::spawn(get_ticker_data(ticker_tx));
+
+        let kline_process = tokio::spawn(process_kline_data(kline_rx, market_data_kline));
+        let ticker_process = tokio::spawn(process_ticker_data(ticker_rx, market_data_ticker));
+
+        let _ = join!(kline_handle, ticker_handle, kline_process, ticker_process);
+
+        // Update self.market_data with final state
+        self.market_data = (*market_data.lock().unwrap()).clone();
+    }
+}
+async fn process_kline_data(
+    mut receiver: mpsc::Receiver<Kline>,
+    market_data: Arc<Mutex<MarketData>>,
+) {
+    while let Some(kline) = receiver.recv().await {
+        let mut data = market_data.lock().unwrap();
+        // Update market data
+        *data = MarketData {
+            symbol: kline.symbol.clone(),
+            open_price: kline.open_price.parse().unwrap_or_default(),
+            close_price: kline.close_price.parse().unwrap_or_default(),
+            high_price: kline.high_price.parse().unwrap_or_default(),
+            low_price: kline.low_price.parse().unwrap_or_default(),
+            ..*data
+        };
+
+        // Log or do additional processing
+        log::info!(
+            "Kline Update - Symbol: {}, Open: {}, Close: {}",
+            kline.symbol,
+            kline.open_price,
+            kline.close_price
+        );
+    }
+}
+
+// เช่นเดียวกันสำหรับ ticker data
+async fn process_ticker_data(
+    mut receiver: mpsc::Receiver<TickerData>,
+    market_data: Arc<Mutex<MarketData>>,
+) {
+    while let Some(ticker) = receiver.recv().await {
+        let mut data = market_data.lock().unwrap();
+        // Update market data
+        *data = MarketData {
+            symbol: ticker.symbol.clone(),
+            last_price: ticker.last_price.parse().unwrap_or_default(),
+            ..*data
+        };
+
+        // Log or do additional processing
+        log::info!(
+            "Ticker Update - Symbol: {}, Last: {}",
+            ticker.symbol,
+            ticker.last_price
+        );
     }
 }
 pub async fn get_kline_data(mut sender: mpsc::Sender<Kline>) {

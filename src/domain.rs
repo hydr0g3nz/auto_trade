@@ -41,7 +41,7 @@ pub enum OrderStatus {
 }
 
 /// Market Data Structures
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MarketData {
     pub symbol: String,
     pub timestamp: u64,
