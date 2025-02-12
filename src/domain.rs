@@ -1,6 +1,5 @@
 use std::{error::Error, fmt};
 
-
 /// Core Trading Components
 #[derive(Debug, Clone)]
 pub struct Order {
@@ -46,8 +45,12 @@ pub enum OrderStatus {
 pub struct MarketData {
     pub symbol: String,
     pub timestamp: u64,
-    pub price: f64,
     pub volume: f64,
+    pub last_price: f64,
+    pub open_price: f64,
+    pub close_price: f64,
+    pub high_price: f64,
+    pub low_price: f64,
 }
 
 /// Error Handling
@@ -75,11 +78,11 @@ impl Error for TradingError {}
 
 /// Core Trading Traits
 pub trait ExchangeClient {
-   async fn connect(&mut self) -> Result<(), TradingError>;
-   async fn disconnect(&mut self) -> Result<(), TradingError>;
-   async fn get_balance(&self) -> Result<f64, TradingError>;
-   async fn send_order(&mut self, order: &Order) -> Result<OrderResponse, TradingError>;
-   async fn cancel_order(&mut self, order_id: &str) -> Result<(), TradingError>;
+    async fn connect(&mut self) -> Result<(), TradingError>;
+    async fn disconnect(&mut self) -> Result<(), TradingError>;
+    async fn get_balance(&self) -> Result<f64, TradingError>;
+    async fn send_order(&mut self, order: &Order) -> Result<OrderResponse, TradingError>;
+    async fn cancel_order(&mut self, order_id: &str) -> Result<(), TradingError>;
     // Add more exchange methods
 }
 
