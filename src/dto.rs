@@ -18,7 +18,7 @@ pub struct KlineData {
     pub kline: Kline,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize,Default)]
 pub struct Kline {
     #[serde(rename = "t")]
     pub start_time: i64,
@@ -66,7 +66,7 @@ pub struct WebSocketMessage {
     pub data: TickerData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize,Default)]
 pub struct TickerData {
     /// Event type
     #[serde(rename = "e")]

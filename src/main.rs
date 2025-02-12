@@ -5,6 +5,7 @@ use crate::domain::*;
 mod dto;
 use crate::dto::*;
 
+use binance_spot_connector_rust::market_stream::ticker;
 use binance_spot_connector_rust::market_stream::ticker::TickerStream;
 use binance_spot_connector_rust::{
     http::Credentials,
@@ -21,6 +22,7 @@ use hyper::client::connect::Connect;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use tokio::join;
+use tokio::sync::mpsc;
 pub struct BinanceExchangeClient {
     connected: bool,
     balance: f64,
@@ -57,17 +59,39 @@ impl BinanceExchangeClient {
         log::info!("{}", data);
         Ok(data)
     }
+    pub async fn process_kline_data(mut receiver: mpsc::Receiver<Kline>) {
+        while let Some(kline) = receiver.recv().await {
+            println!(
+                "Kline Update - Symbol: {}, Open: {}, Close: {}",
+                kline.symbol, kline.open_price, kline.close_price
+            );
+            // Add your kline data processing logic here
+        }
+    }
 
+    pub async fn process_ticker_data(mut receiver: mpsc::Receiver<TickerData>) {
+        while let Some(ticker) = receiver.recv().await {
+            println!(
+                "Ticker Update - Symbol: {}, Last: {}, Bid: {}, Ask: {}",
+                ticker.symbol, ticker.last_price, ticker.bid_price, ticker.ask_price
+            );
+            // Add your ticker data processing logic here
+        }
+    }
     pub async fn get_all_market_data(&self) {
+        let (kline_tx, kline_rx) = mpsc::channel(100);
+        let (ticker_tx, ticker_rx) = mpsc::channel(100);
         // Create two separate tasks for kline and ticker data
-        let kline_handle = tokio::spawn(get_kline_data());
-        let ticker_handle = tokio::spawn(get_ticker_data());
-
+        let kline_handle = tokio::spawn(get_kline_data(kline_tx));
+        let ticker_handle = tokio::spawn(get_ticker_data( ticker_tx));
+        // Spawn data processing tasks
+        let kline_process = tokio::spawn(Self::process_kline_data(kline_rx));
+        let ticker_process = tokio::spawn(Self::process_ticker_data(ticker_rx));
         // Wait for both tasks to complete
         let _ = join!(kline_handle, ticker_handle);
     }
 }
-pub async fn get_kline_data() {
+pub async fn get_kline_data(mut sender: mpsc::Sender<Kline>) {
     // Establish connection
     let (mut conn, _) = BinanceWebSocketClient::connect_async_default()
         .await
@@ -92,12 +116,22 @@ pub async fn get_kline_data() {
                 let data = std::str::from_utf8(&binary_data).expect("Failed to parse message");
                 match parse_websocket_message(data) {
                     Ok(response) => {
-                        log::info!(
-                            "Received kline data for {}: Open: {}, Close: {}",
-                            response.data.symbol,
-                            response.data.kline.open_price,
-                            response.data.kline.close_price,
-                        );
+                        let mut kline_data = Kline::default();
+                        kline_data.symbol = response.data.symbol.clone();
+                        kline_data.open_price = response.data.kline.open_price.clone();
+                        kline_data.close_price = response.data.kline.close_price.clone();
+                        kline_data.low_price = response.data.kline.low_price.clone();
+                        kline_data.high_price = response.data.kline.high_price.clone();
+                        kline_data.volume = response.data.kline.volume.clone();
+                        if let Err(e) = sender.send(kline_data).await {
+                            log::error!("Failed to send kline data: {}", e);
+                        }
+                        // log::info!(
+                        //     "Received kline data for {}: Open: {}, Close: {}",
+                        //     response.data.symbol,
+                        //     response.data.kline.open_price,
+                        //     response.data.kline.close_price,
+                        // );
                     }
                     Err(e) => log::error!("Failed to parse JSON: {} raw data: {}", e, data),
                 }
@@ -108,7 +142,7 @@ pub async fn get_kline_data() {
     // Disconnect
     conn.close().await.expect("Failed to disconnect");
 }
-pub async fn get_ticker_data() {
+pub async fn get_ticker_data(mut sender: mpsc::Sender<TickerData>) {
     // Establish connection
     let (mut conn, _) = BinanceWebSocketClient::connect_async_default()
         .await
@@ -116,7 +150,7 @@ pub async fn get_ticker_data() {
     // Subscribe to streams
     conn.subscribe(vec![
         // &KlineStream::new("BTCUSDT", KlineInterval::Minutes1).into()
-        &TickerStream::from_symbol("BTCUSDT").into()
+        &TickerStream::from_symbol("BTCUSDT").into(),
     ])
     .await;
     // Start a timer for 10 seconds
@@ -134,13 +168,19 @@ pub async fn get_ticker_data() {
                 let data = std::str::from_utf8(&binary_data).expect("Failed to parse message");
                 match parse_websocket_message_ticker(data) {
                     Ok(response) => {
-                        log::info!(
-                            "Received ticker data for {}: last: {}, bid: {}, ask: {}",
-                            response.data.symbol,
-                            response.data.last_price,
-                            response.data.bid_price,
-                            response.data.ask_price,
-                        );
+                        let mut ticker_data = TickerData::default();
+                        ticker_data.symbol = response.data.symbol.clone();
+                        ticker_data.last_price = response.data.last_price.clone();
+                        if let Err(e) = sender.send(ticker_data).await {
+                            log::error!("Failed to send kline data: {}", e);
+                        }
+                        // log::info!(
+                        //     "Received ticker data for {}: last: {}, bid: {}, ask: {}",
+                        //     response.data.symbol,
+                        //     response.data.last_price,
+                        //     response.data.bid_price,
+                        //     response.data.ask_price,
+                        // );
                     }
                     Err(e) => log::error!("Failed to parse JSON: {} raw data: {}", e, data),
                 }
