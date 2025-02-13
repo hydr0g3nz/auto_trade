@@ -39,7 +39,20 @@ pub enum OrderStatus {
     Rejected,
     Pending,
 }
+#[derive(Debug, Clone)]
+pub struct TradingSignal {
+    pub symbol: String,
+    pub action: TradeAction,
+    pub price: f64,
+    pub timestamp: i64,
+}
 
+#[derive(Debug, Clone)]
+pub enum TradeAction {
+    Buy,
+    Sell,
+    Hold,
+}
 /// Market Data Structures
 #[derive(Debug, Clone, Default)]
 pub struct MarketData {

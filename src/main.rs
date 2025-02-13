@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-
 mod domain;
 use crate::domain::*;
 mod dto;
@@ -70,43 +69,35 @@ impl BinanceExchangeClient {
         log::info!("{}", data);
         Ok(data)
     }
-    fn update_market_state(&mut self, kline: &Kline) {
-        self.market_data = MarketData {
-            symbol: kline.symbol.clone(),
-            open_price: kline.open_price.parse().unwrap_or_default(),
-            close_price: kline.close_price.parse().unwrap_or_default(),
-            high_price: kline.high_price.parse().unwrap_or_default(),
-            low_price: kline.low_price.parse().unwrap_or_default(),
-            ..self.market_data
-        };
-    }
 
-    fn update_ticker_state(&mut self, ticker: &TickerData) {
-        self.market_data = MarketData {
-            symbol: ticker.symbol.clone(),
-            last_price: ticker.last_price.parse().unwrap_or_default(),
-            ..self.market_data
-        }
-    }
 
-    // แล้วใน get_all_market_data จะเรียกใช้แบบนี้:
     pub async fn get_all_market_data(&mut self) {
         let (kline_tx, kline_rx) = mpsc::channel(100);
         let (ticker_tx, ticker_rx) = mpsc::channel(100);
+        let (signal_tx, signal_rx) = mpsc::channel(100);  // New channel for trading signals
 
         let market_data = Arc::new(Mutex::new(self.market_data.clone()));
         let market_data_kline = market_data.clone();
         let market_data_ticker = market_data.clone();
+        let market_data_analysis = market_data.clone();
 
         let kline_handle = tokio::spawn(get_kline_data(kline_tx));
         let ticker_handle = tokio::spawn(get_ticker_data(ticker_tx));
+        let analysis_handle = tokio::spawn(analyze_price_data(market_data_analysis, signal_tx));
 
         let kline_process = tokio::spawn(process_kline_data(kline_rx, market_data_kline));
         let ticker_process = tokio::spawn(process_ticker_data(ticker_rx, market_data_ticker));
+        let signal_process = tokio::spawn(process_trading_signals(signal_rx));
 
-        let _ = join!(kline_handle, ticker_handle, kline_process, ticker_process);
+        let _ = join!(
+            kline_handle, 
+            ticker_handle, 
+            kline_process, 
+            ticker_process,
+            analysis_handle,
+            signal_process
+        );
 
-        // Update self.market_data with final state
         self.market_data = (*market_data.lock().unwrap()).clone();
     }
 }
@@ -258,7 +249,78 @@ pub async fn get_ticker_data(mut sender: mpsc::Sender<TickerData>) {
     // Disconnect
     conn.close().await.expect("Failed to disconnect");
 }
+async fn analyze_price_data(
+    market_data: Arc<Mutex<MarketData>>,
+    signal_sender: mpsc::Sender<TradingSignal>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    
+    loop {
+        interval.tick().await; // Correctly await the tick without matching it to `()`
+        let data = market_data.lock().unwrap().clone();
+        
+        // Simple example strategy - you can replace this with your own logic
+        let signal = analyze_market_conditions(&data);
+        
+        if let Some(trading_signal) = signal {
+            if let Err(e) = signal_sender.send(trading_signal).await {
+                log::error!("Failed to send trading signal: {}", e);
+            }
+        }
+    }
+}
 
+// Process trading signals
+async fn process_trading_signals(mut receiver: mpsc::Receiver<TradingSignal>) {
+    while let Some(signal) = receiver.recv().await {
+        match signal.action {
+            TradeAction::Buy => {
+                log::info!(
+                    "Buy Signal - Symbol: {}, Price: {}", 
+                    signal.symbol, 
+                    signal.price
+                );
+                // Add your order execution logic here
+            },
+            TradeAction::Sell => {
+                log::info!(
+                    "Sell Signal - Symbol: {}, Price: {}", 
+                    signal.symbol, 
+                    signal.price
+                );
+                // Add your order execution logic here
+            },
+            TradeAction::Hold => {
+                log::debug!(
+                    "Hold Position - Symbol: {}, Price: {}", 
+                    signal.symbol, 
+                    signal.price
+                );
+            }
+        }
+    }
+}
+
+// Example strategy function - replace with your own trading logic
+fn analyze_market_conditions(data: &MarketData) -> Option<TradingSignal> {
+    // Simple example: Generate buy signal if current price is lower than opening price by 2%
+    let price_change_percentage = ((data.last_price - data.open_price) / data.open_price) * 100.0;
+    
+    let action = if price_change_percentage < -2.0 {
+        TradeAction::Buy
+    } else if price_change_percentage > 2.0 {
+        TradeAction::Sell
+    } else {
+        TradeAction::Hold
+    };
+
+    Some(TradingSignal {
+        symbol: data.symbol.clone(),
+        action,
+        price: data.last_price,
+        timestamp: chrono::Utc::now().timestamp(),
+    })
+}
 impl ExchangeClient for BinanceExchangeClient {
     async fn connect(&mut self) -> Result<(), TradingError> {
         if let Ok(data) = self.account_status().await {
