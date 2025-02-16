@@ -6,7 +6,8 @@ use crate::domain::*;
 mod dto;
 use crate::dto::Error as dtoError;
 use crate::dto::*;
-
+mod ta;
+use ta::*;
 use binance_spot_connector_rust::market;
 use binance_spot_connector_rust::market_stream::ticker;
 use binance_spot_connector_rust::market_stream::ticker::TickerStream;
@@ -36,6 +37,7 @@ pub struct BinanceExchangeClient {
     credentials: Credentials,
     client: BinanceHttpClient<HttpsConnector<HttpConnector>>,
     market_data: Arc<Mutex<MarketData>>,
+    price_data: Arc<Mutex<Vec<f64>>>,
 }
 impl BinanceExchangeClient {
     pub fn new(credentials: Credentials) -> Self {
@@ -45,6 +47,7 @@ impl BinanceExchangeClient {
             credentials: credentials.clone(),
             client: BinanceHttpClient::default().credentials(credentials),
             market_data: Arc::new(Mutex::new(MarketData::default())),
+            price_data: Arc::new(Mutex::new(Vec::new())),
         }
     }
     pub async fn start(&mut self) -> Result<(), Error> {
