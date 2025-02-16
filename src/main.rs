@@ -8,6 +8,8 @@ use crate::dto::*;
 
 use binance_spot_connector_rust::market_stream::ticker;
 use binance_spot_connector_rust::market_stream::ticker::TickerStream;
+use binance_spot_connector_rust::trade;
+use binance_spot_connector_rust::trade::order::Side;
 use binance_spot_connector_rust::{
     http::Credentials,
     hyper::{BinanceHttpClient, Error},
@@ -22,6 +24,8 @@ use futures_util::StreamExt;
 use hyper::client::connect::Connect;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::Decimal;
 use tokio::join;
 use tokio::sync::mpsc;
 pub struct BinanceExchangeClient {
@@ -29,7 +33,7 @@ pub struct BinanceExchangeClient {
     balance: f64,
     credentials: Credentials,
     client: BinanceHttpClient<HttpsConnector<HttpConnector>>,
-    market_data: MarketData,
+    market_data: Arc<Mutex<MarketData>>,
 }
 impl BinanceExchangeClient {
     pub fn new(credentials: Credentials) -> Self {
@@ -38,7 +42,7 @@ impl BinanceExchangeClient {
             balance: 0.0,
             credentials: credentials.clone(),
             client: BinanceHttpClient::default().credentials(credentials),
-            market_data: MarketData::default(),
+            market_data: Arc::new(Mutex::new(MarketData::default())),
         }
     }
     pub async fn start(&mut self) -> Result<(), Error> {
@@ -59,7 +63,6 @@ impl BinanceExchangeClient {
         Ok(data)
     }
     pub async fn api_trading_status(&self) -> Result<String, Error> {
-        let client = BinanceHttpClient::default().credentials(self.credentials.clone());
         let data = self
             .client
             .send(wallet::api_trading_status())
@@ -69,17 +72,33 @@ impl BinanceExchangeClient {
         log::info!("{}", data);
         Ok(data)
     }
-
+    pub async fn send_order(&self, order: &Order) -> Result<String, Error> {
+        let side = match order.side {
+            OrderSide::Buy => Side::Buy,
+            OrderSide::Sell => Side::Sell,
+        };
+        let quantity = Decimal::from_f64(order.quantity).unwrap();
+        let data = self
+            .client
+            .send(
+                trade::new_order(&order.symbol, side, order.order_type.to_string().as_str())
+                    .quantity(quantity),
+            )
+            .await?
+            .into_body_str()
+            .await?;
+        log::info!("{}", data);
+        Ok(data)
+    }
 
     pub async fn get_all_market_data(&mut self) {
         let (kline_tx, kline_rx) = mpsc::channel(100);
         let (ticker_tx, ticker_rx) = mpsc::channel(100);
-        let (signal_tx, signal_rx) = mpsc::channel(100);  // New channel for trading signals
+        let (signal_tx, signal_rx) = mpsc::channel(100); // New channel for trading signals
 
-        let market_data = Arc::new(Mutex::new(self.market_data.clone()));
-        let market_data_kline = market_data.clone();
-        let market_data_ticker = market_data.clone();
-        let market_data_analysis = market_data.clone();
+        let market_data_kline = self.market_data.clone();
+        let market_data_ticker = self.market_data.clone();
+        let market_data_analysis = self.market_data.clone();
 
         let kline_handle = tokio::spawn(get_kline_data(kline_tx));
         let ticker_handle = tokio::spawn(get_ticker_data(ticker_tx));
@@ -90,15 +109,13 @@ impl BinanceExchangeClient {
         let signal_process = tokio::spawn(process_trading_signals(signal_rx));
 
         let _ = join!(
-            kline_handle, 
-            ticker_handle, 
-            kline_process, 
+            kline_handle,
+            ticker_handle,
+            kline_process,
             ticker_process,
             analysis_handle,
             signal_process
         );
-
-        self.market_data = (*market_data.lock().unwrap()).clone();
     }
 }
 async fn process_kline_data(
@@ -254,14 +271,14 @@ async fn analyze_price_data(
     signal_sender: mpsc::Sender<TradingSignal>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
-    
+
     loop {
         interval.tick().await; // Correctly await the tick without matching it to `()`
         let data = market_data.lock().unwrap().clone();
-        
+
         // Simple example strategy - you can replace this with your own logic
         let signal = analyze_market_conditions(&data);
-        
+
         if let Some(trading_signal) = signal {
             if let Err(e) = signal_sender.send(trading_signal).await {
                 log::error!("Failed to send trading signal: {}", e);
@@ -276,24 +293,24 @@ async fn process_trading_signals(mut receiver: mpsc::Receiver<TradingSignal>) {
         match signal.action {
             TradeAction::Buy => {
                 log::info!(
-                    "Buy Signal - Symbol: {}, Price: {}", 
-                    signal.symbol, 
+                    "Buy Signal - Symbol: {}, Price: {}",
+                    signal.symbol,
                     signal.price
                 );
                 // Add your order execution logic here
-            },
+            }
             TradeAction::Sell => {
                 log::info!(
-                    "Sell Signal - Symbol: {}, Price: {}", 
-                    signal.symbol, 
+                    "Sell Signal - Symbol: {}, Price: {}",
+                    signal.symbol,
                     signal.price
                 );
                 // Add your order execution logic here
-            },
+            }
             TradeAction::Hold => {
                 log::debug!(
-                    "Hold Position - Symbol: {}, Price: {}", 
-                    signal.symbol, 
+                    "Hold Position - Symbol: {}, Price: {}",
+                    signal.symbol,
                     signal.price
                 );
             }
@@ -305,7 +322,7 @@ async fn process_trading_signals(mut receiver: mpsc::Receiver<TradingSignal>) {
 fn analyze_market_conditions(data: &MarketData) -> Option<TradingSignal> {
     // Simple example: Generate buy signal if current price is lower than opening price by 2%
     let price_change_percentage = ((data.last_price - data.open_price) / data.open_price) * 100.0;
-    
+
     let action = if price_change_percentage < -2.0 {
         TradeAction::Buy
     } else if price_change_percentage > 2.0 {

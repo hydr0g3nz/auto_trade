@@ -17,6 +17,15 @@ pub enum OrderType {
     Stop(f64),
     // Add more order types
 }
+impl fmt::Display for OrderType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OrderType::Market => write!(f, "MARKET"),
+            OrderType::Limit(price) => write!(f, "LIMIT {}", price),
+            OrderType::Stop(price) => write!(f, "STOP {}", price),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderSide {

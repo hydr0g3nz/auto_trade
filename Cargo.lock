@@ -244,6 +244,7 @@ dependencies = [
  "hyper 0.14.32",
  "hyper-tls",
  "log",
+ "rust_decimal",
  "rust_decimal_macros",
  "serde",
  "serde_json",
