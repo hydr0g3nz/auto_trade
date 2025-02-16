@@ -4,8 +4,10 @@ use std::time::Duration;
 mod domain;
 use crate::domain::*;
 mod dto;
+use crate::dto::Error as dtoError;
 use crate::dto::*;
 
+use binance_spot_connector_rust::market;
 use binance_spot_connector_rust::market_stream::ticker;
 use binance_spot_connector_rust::market_stream::ticker::TickerStream;
 use binance_spot_connector_rust::trade;
@@ -71,6 +73,31 @@ impl BinanceExchangeClient {
             .await?;
         log::info!("{}", data);
         Ok(data)
+    }
+    pub async fn get_klines(&self, symbol: &str) -> Result<Vec<KlineResponse>, dtoError> {
+        let request = market::klines(symbol, KlineInterval::Hours1).limit(1);
+        let response = self
+            .client
+            .send(request)
+            .await
+            .map_err(|e| dtoError::RequestError(format!("{:?}", e)))?;
+        let data = response
+            .into_body_str()
+            .await
+            .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
+
+        let raw_klines: Vec<Vec<serde_json::Value>> = match serde_json::from_str(&data) {
+            Ok(klines) => klines,
+            Err(e) => return Err(dtoError::from(e)),
+        };
+
+        let klines = raw_klines
+            .iter()
+            .map(|kline_data| KlineResponse::from_raw_data(kline_data))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| dtoError::from(e))?;
+
+        Ok(klines)
     }
     pub async fn send_order(&self, order: &Order) -> Result<String, Error> {
         let side = match order.side {
@@ -340,17 +367,24 @@ fn analyze_market_conditions(data: &MarketData) -> Option<TradingSignal> {
 }
 impl ExchangeClient for BinanceExchangeClient {
     async fn connect(&mut self) -> Result<(), TradingError> {
-        if let Ok(data) = self.account_status().await {
-            // Ok(())
-        } else {
-            return Err(TradingError::ConnectionError("Failed to connect".into()));
+        match self.account_status().await {
+            Ok(_) => (),
+            Err(e) => {
+                log::error!("Failed to connect: {:?}", e);
+                return Err(TradingError::ConnectionError("Failed to connect".into()));
+            }
         }
-        if let Ok(data) = self.api_trading_status().await {
-            self.connected = true;
-            log::info!("Connected to Binance");
-            Ok(())
-        } else {
-            Err(TradingError::ConnectionError("Failed to connect".into()))
+
+        match self.api_trading_status().await {
+            Ok(_) => {
+                self.connected = true;
+                log::info!("Connected to Binance");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to connect: {:?}", e);
+                Err(TradingError::ConnectionError("Failed to connect".into()))
+            }
         }
     }
 
@@ -395,6 +429,9 @@ async fn main() {
     let mut client = BinanceExchangeClient::new(credentials);
 
     client.connect().await.unwrap();
+    let h_kline = client.get_klines("BTCUSDT").await.unwrap();
+    println!("Klines: {:?}", h_kline);
+    return;
     // client.get_market_data().await;
     client.get_all_market_data().await;
     let order = Order {
