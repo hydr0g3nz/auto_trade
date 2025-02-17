@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -7,8 +8,8 @@ mod dto;
 use crate::dto::Error as dtoError;
 use crate::dto::*;
 mod ta;
-use ta::*;
 use binance_spot_connector_rust::market;
+use binance_spot_connector_rust::market::time;
 use binance_spot_connector_rust::market_stream::ticker;
 use binance_spot_connector_rust::market_stream::ticker::TickerStream;
 use binance_spot_connector_rust::trade;
@@ -21,6 +22,7 @@ use binance_spot_connector_rust::{
     tokio_tungstenite::BinanceWebSocketClient,
     wallet::{self, account_status},
 };
+use ta::*;
 
 use env_logger::Builder;
 use futures_util::StreamExt;
@@ -37,17 +39,21 @@ pub struct BinanceExchangeClient {
     credentials: Credentials,
     client: BinanceHttpClient<HttpsConnector<HttpConnector>>,
     market_data: Arc<Mutex<MarketData>>,
-    price_data: Arc<Mutex<Vec<f64>>>,
+    price_data: Arc<Mutex<VecDeque<f64>>>,
+    symbol: String,
+    current_timestamp: Arc<Mutex<i64>>,
 }
 impl BinanceExchangeClient {
     pub fn new(credentials: Credentials) -> Self {
         BinanceExchangeClient {
             connected: false,
             balance: 0.0,
+            symbol: String::new(),
             credentials: credentials.clone(),
             client: BinanceHttpClient::default().credentials(credentials),
             market_data: Arc::new(Mutex::new(MarketData::default())),
-            price_data: Arc::new(Mutex::new(Vec::new())),
+            price_data: Arc::new(Mutex::new(VecDeque::new())),
+            current_timestamp: Arc::new(Mutex::new(0)),
         }
     }
     pub async fn start(&mut self) -> Result<(), Error> {
@@ -57,6 +63,25 @@ impl BinanceExchangeClient {
             log::info!("Current market data: {:?}", self.market_data);
         }
     }
+    pub async fn set_symbol(&mut self, symbol: String) {
+        self.symbol = symbol;
+    }
+    pub async fn get_historical_prices(
+        &mut self,
+        window_size: usize,
+    ) -> Result<Vec<KlineResponse>, dtoError> {
+        let data = self
+            .get_klines(KlineInterval::Hours1, window_size)
+            .await
+            .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
+        self.price_data = Arc::new(Mutex::new(data.iter().map(|k| k.close_price).collect()));
+        Ok(data)
+    }
+    pub async fn update_prices(&mut self, prices: f64) {
+        self.price_data.lock().unwrap().push_back(prices);
+        self.price_data.lock().unwrap().pop_front();
+    }
+
     pub async fn account_status(&self) -> Result<String, Error> {
         let data = self
             .client
@@ -77,8 +102,12 @@ impl BinanceExchangeClient {
         log::info!("{}", data);
         Ok(data)
     }
-    pub async fn get_klines(&self, symbol: &str) -> Result<Vec<KlineResponse>, dtoError> {
-        let request = market::klines(symbol, KlineInterval::Hours1).limit(1);
+    pub async fn get_klines(
+        &self,
+        timeframe: KlineInterval,
+        window_size: usize,
+    ) -> Result<Vec<KlineResponse>, dtoError> {
+        let request = market::klines(&self.symbol, timeframe).limit(window_size as u32);
         let response = self
             .client
             .send(request)
@@ -125,7 +154,7 @@ impl BinanceExchangeClient {
         let (kline_tx, kline_rx) = mpsc::channel(100);
         let (ticker_tx, ticker_rx) = mpsc::channel(100);
         let (signal_tx, signal_rx) = mpsc::channel(100); // New channel for trading signals
-
+        let (current_timestamp_tx, current_timestamp_rx) = mpsc::channel(100);
         let market_data_kline = self.market_data.clone();
         let market_data_ticker = self.market_data.clone();
         let market_data_analysis = self.market_data.clone();
@@ -134,7 +163,11 @@ impl BinanceExchangeClient {
         let ticker_handle = tokio::spawn(get_ticker_data(ticker_tx));
         let analysis_handle = tokio::spawn(analyze_price_data(market_data_analysis, signal_tx));
 
-        let kline_process = tokio::spawn(process_kline_data(kline_rx, market_data_kline));
+        let kline_process = tokio::spawn(process_kline_data(
+            kline_rx,
+            current_timestamp_tx,
+            market_data_kline,
+        ));
         let ticker_process = tokio::spawn(process_ticker_data(ticker_rx, market_data_ticker));
         let signal_process = tokio::spawn(process_trading_signals(signal_rx));
 
@@ -150,6 +183,7 @@ impl BinanceExchangeClient {
 }
 async fn process_kline_data(
     mut receiver: mpsc::Receiver<Kline>,
+    current_timestamp: mpsc::Sender<i64>,
     market_data: Arc<Mutex<MarketData>>,
 ) {
     while let Some(kline) = receiver.recv().await {
@@ -163,7 +197,10 @@ async fn process_kline_data(
             low_price: kline.low_price.parse().unwrap_or_default(),
             ..*data
         };
-
+        let end_time = Arc::new(Mutex::new(kline.end_time));
+        if let Err(e) = current_timestamp.send(end_time.lock().unwrap().clone()).await {
+            log::error!("Failed to send trading signal: {}", e);
+        }
         // Log or do additional processing
         log::info!(
             "Kline Update - Symbol: {}, Open: {}, Close: {}",
@@ -430,11 +467,13 @@ async fn main() {
     let api_secret = dotenv::var("BINANCE_API_SECRET").expect("BINANCE_API_SECRET must be set");
     let credentials = Credentials::from_hmac(api_key, api_secret);
     let mut client = BinanceExchangeClient::new(credentials);
-
+    client.set_symbol("BTCUSDT".to_string()).await;
     client.connect().await.unwrap();
-    let h_kline = client.get_klines("BTCUSDT").await.unwrap();
-    println!("Klines: {:?}", h_kline);
+    let prices = client.get_historical_prices(15).await.unwrap();
+    println!("Prices: {:?}", prices);
     return;
+    let h_kline = client.get_klines(KlineInterval::Hours1, 1).await.unwrap();
+    println!("Klines: {:?}", h_kline);
     // client.get_market_data().await;
     client.get_all_market_data().await;
     let order = Order {
