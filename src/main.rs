@@ -56,12 +56,13 @@ impl BinanceExchangeClient {
             current_timestamp: Arc::new(Mutex::new(0)),
         }
     }
-    pub async fn start(&mut self) -> Result<(), Error> {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            log::info!("Current market data: {:?}", self.market_data);
-        }
+    pub async fn start(&mut self) -> Result<(), dtoError> {
+        let prices = self
+            .get_historical_prices(15)
+            .await
+            .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
+        println!("Prices: {:?}", prices); //    self.update_prices()
+        Ok(())
     }
     pub async fn set_symbol(&mut self, symbol: String) {
         self.symbol = symbol;
@@ -161,7 +162,12 @@ impl BinanceExchangeClient {
 
         let kline_handle = tokio::spawn(get_kline_data(kline_tx));
         let ticker_handle = tokio::spawn(get_ticker_data(ticker_tx));
-        let analysis_handle = tokio::spawn(analyze_price_data(market_data_analysis, signal_tx));
+        let analysis_handle = tokio::spawn(analyze_price_data(
+            market_data_analysis,
+            signal_tx,
+            current_timestamp_rx,
+            self.current_timestamp.clone(),
+        ));
 
         let kline_process = tokio::spawn(process_kline_data(
             kline_rx,
@@ -187,27 +193,29 @@ async fn process_kline_data(
     market_data: Arc<Mutex<MarketData>>,
 ) {
     while let Some(kline) = receiver.recv().await {
-        let mut data = market_data.lock().unwrap();
-        // Update market data
-        *data = MarketData {
-            symbol: kline.symbol.clone(),
-            open_price: kline.open_price.parse().unwrap_or_default(),
-            close_price: kline.close_price.parse().unwrap_or_default(),
-            high_price: kline.high_price.parse().unwrap_or_default(),
-            low_price: kline.low_price.parse().unwrap_or_default(),
-            ..*data
-        };
-        let end_time = Arc::new(Mutex::new(kline.end_time));
-        if let Err(e) = current_timestamp.send(end_time.lock().unwrap().clone()).await {
-            log::error!("Failed to send trading signal: {}", e);
+        {
+            let mut data = market_data.lock().unwrap();
+            // Update market data
+            *data = MarketData {
+                symbol: kline.symbol.clone(),
+                open_price: kline.open_price.parse().unwrap_or_default(),
+                close_price: kline.close_price.parse().unwrap_or_default(),
+                high_price: kline.high_price.parse().unwrap_or_default(),
+                low_price: kline.low_price.parse().unwrap_or_default(),
+                ..*data
+            };
+        }
+        let end_time = kline.end_time; // Copy the value
+        if let Err(e) = current_timestamp.send(end_time).await {
+            log::error!("Failed to send timestamp: {}", e);
         }
         // Log or do additional processing
-        log::info!(
-            "Kline Update - Symbol: {}, Open: {}, Close: {}",
-            kline.symbol,
-            kline.open_price,
-            kline.close_price
-        );
+        // log::info!(
+        //     "Kline Update - Symbol: {}, Open: {}, Close: {}",
+        //     kline.symbol,
+        //     kline.open_price,
+        //     kline.close_price
+        // );
     }
 }
 
@@ -226,11 +234,11 @@ async fn process_ticker_data(
         };
 
         // Log or do additional processing
-        log::info!(
-            "Ticker Update - Symbol: {}, Last: {}",
-            ticker.symbol,
-            ticker.last_price
-        );
+        // log::info!(
+        //     "Ticker Update - Symbol: {}, Last: {}",
+        //     ticker.symbol,
+        //     ticker.last_price
+        // );
     }
 }
 pub async fn get_kline_data(mut sender: mpsc::Sender<Kline>) {
@@ -265,6 +273,8 @@ pub async fn get_kline_data(mut sender: mpsc::Sender<Kline>) {
                         kline_data.low_price = response.data.kline.low_price.clone();
                         kline_data.high_price = response.data.kline.high_price.clone();
                         kline_data.volume = response.data.kline.volume.clone();
+                        kline_data.start_time = response.data.kline.start_time.clone();
+                        kline_data.end_time = response.data.kline.end_time.clone();
                         if let Err(e) = sender.send(kline_data).await {
                             log::error!("Failed to send kline data: {}", e);
                         }
@@ -275,7 +285,15 @@ pub async fn get_kline_data(mut sender: mpsc::Sender<Kline>) {
                         //     response.data.kline.close_price,
                         // );
                     }
-                    Err(e) => log::error!("Failed to parse JSON: {} raw data: {}", e, data),
+                    Err(e) => {
+                        if let Ok(_) = data.trim().parse::<i64>() {
+                            // Skip logging if it's an integer
+                            // log::debug!("Received numeric data, skipping");
+                            continue;
+                        } else {
+                            log::error!("Failed to parse JSON: {} raw data: {}", e, data);
+                        }
+                    }
                 }
             }
             Err(_) => break,
@@ -324,7 +342,15 @@ pub async fn get_ticker_data(mut sender: mpsc::Sender<TickerData>) {
                         //     response.data.ask_price,
                         // );
                     }
-                    Err(e) => log::error!("Failed to parse JSON: {} raw data: {}", e, data),
+                    Err(e) => {
+                        if let Ok(_) = data.trim().parse::<i64>() {
+                            // Skip logging if it's an integer
+                            // log::debug!("Received numeric data, skipping");
+                            continue;
+                        } else {
+                            log::error!("Failed to parse JSON: {} raw data: {}", e, data);
+                        }
+                    }
                 }
             }
             Err(_) => break,
@@ -336,20 +362,41 @@ pub async fn get_ticker_data(mut sender: mpsc::Sender<TickerData>) {
 async fn analyze_price_data(
     market_data: Arc<Mutex<MarketData>>,
     signal_sender: mpsc::Sender<TradingSignal>,
+    mut current_timestamp: mpsc::Receiver<i64>,
+    current_timestamp_ud: Arc<Mutex<i64>>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-
-    loop {
-        interval.tick().await; // Correctly await the tick without matching it to `()`
-        let data = market_data.lock().unwrap().clone();
-
-        // Simple example strategy - you can replace this with your own logic
-        let signal = analyze_market_conditions(&data);
-
-        if let Some(trading_signal) = signal {
-            if let Err(e) = signal_sender.send(trading_signal).await {
-                log::error!("Failed to send trading signal: {}", e);
+    while let Some(current_timestamp_closed) = current_timestamp.recv().await {
+        {
+            let mut current_timestamp_ud = current_timestamp_ud.lock().unwrap();
+            log::debug!(
+                "current_timestamp_closed: {} | current_timestamp_ud: {}",
+                current_timestamp_closed,
+                *current_timestamp_ud
+            );
+            if *current_timestamp_ud == 0 {
+                *current_timestamp_ud = current_timestamp_closed;
+                log::info!("current_timestamp_ud: {}", *current_timestamp_ud);
+                continue;
             }
+        }
+        let data = market_data.lock().unwrap().clone();
+        if data.timestamp as i64 == current_timestamp_closed {
+            continue;
+        }
+
+        let mut current_timestamp_ud = current_timestamp_ud.lock().unwrap();
+        if current_timestamp_closed > *current_timestamp_ud {
+            *current_timestamp_ud = current_timestamp_closed;
+
+            // Simple example strategy - you can replace this with your own logic
+            let signal = analyze_market_conditions(&data);
+            log::info!("current_timestamp_closed: {}", current_timestamp_closed);
+            log::info!("===== market_data : {:?} =====", data);
+            // if let Some(trading_signal) = signal {
+            //     if let Err(e) = signal_sender.send(trading_signal).await {
+            //         log::error!("Failed to send trading signal: {}", e);
+            //     }
+            // }
         }
     }
 }
@@ -469,19 +516,9 @@ async fn main() {
     let mut client = BinanceExchangeClient::new(credentials);
     client.set_symbol("BTCUSDT".to_string()).await;
     client.connect().await.unwrap();
-    let prices = client.get_historical_prices(15).await.unwrap();
-    println!("Prices: {:?}", prices);
-    return;
-    let h_kline = client.get_klines(KlineInterval::Hours1, 1).await.unwrap();
-    println!("Klines: {:?}", h_kline);
-    // client.get_market_data().await;
+    client.start().await;
     client.get_all_market_data().await;
-    let order = Order {
-        symbol: "BTC/USD".to_string(),
-        quantity: 1.0,
-        order_type: OrderType::Market,
-        side: OrderSide::Buy,
-    };
+    // client.get_market_data().await;
 
     // let response = client.send_order(&order).?await.unwrap();;
     // println!("Order response: {:?}", response);

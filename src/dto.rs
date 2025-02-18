@@ -166,6 +166,7 @@ pub struct TickerData {
 pub fn parse_websocket_message_ticker(
     message: &str,
 ) -> Result<WebSocketMessage, serde_json::Error> {
+    // log::debug!("message ticker: {}", message);
     serde_json::from_str(message)
 }
 
