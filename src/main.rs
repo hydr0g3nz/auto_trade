@@ -78,10 +78,6 @@ impl BinanceExchangeClient {
         self.price_data = Arc::new(Mutex::new(data.iter().map(|k| k.close_price).collect()));
         Ok(data)
     }
-    pub async fn update_prices(&mut self, prices: f64) {
-        self.price_data.lock().unwrap().push_back(prices);
-        self.price_data.lock().unwrap().pop_front();
-    }
 
     pub async fn account_status(&self) -> Result<String, Error> {
         let data = self
@@ -167,6 +163,7 @@ impl BinanceExchangeClient {
             signal_tx,
             current_timestamp_rx,
             self.current_timestamp.clone(),
+            self.price_data.clone(),
         ));
 
         let kline_process = tokio::spawn(process_kline_data(
@@ -359,44 +356,97 @@ pub async fn get_ticker_data(mut sender: mpsc::Sender<TickerData>) {
     // Disconnect
     conn.close().await.expect("Failed to disconnect");
 }
+pub async fn update_prices(data: Arc<Mutex<VecDeque<f64>>>, prices: f64) {
+    let mut data = data.lock().unwrap();
+    data.push_back(prices);
+    data.pop_front();
+}
 async fn analyze_price_data(
     market_data: Arc<Mutex<MarketData>>,
     signal_sender: mpsc::Sender<TradingSignal>,
     mut current_timestamp: mpsc::Receiver<i64>,
     current_timestamp_ud: Arc<Mutex<i64>>,
+    history_data: Arc<Mutex<VecDeque<f64>>>,
 ) {
     while let Some(current_timestamp_closed) = current_timestamp.recv().await {
+        // ตรวจสอบ 1: จัดการกรณี timestamp เริ่มต้น
         {
-            let mut current_timestamp_ud = current_timestamp_ud.lock().unwrap();
-            log::debug!(
-                "current_timestamp_closed: {} | current_timestamp_ud: {}",
-                current_timestamp_closed,
-                *current_timestamp_ud
-            );
-            if *current_timestamp_ud == 0 {
-                *current_timestamp_ud = current_timestamp_closed;
-                log::info!("current_timestamp_ud: {}", *current_timestamp_ud);
+            let mut current_timestamp_ud_guard = current_timestamp_ud.lock().unwrap();
+            if *current_timestamp_ud_guard == 0 {
+                *current_timestamp_ud_guard = current_timestamp_closed;
+                log::info!("current_timestamp_ud: {}", *current_timestamp_ud_guard);
                 continue;
             }
-        }
+        } // Guard ถูกปล่อยที่นี่
+
+        // ตรวจสอบ 2: รับข้อมูลตลาด
         let data = market_data.lock().unwrap().clone();
         if data.timestamp as i64 == current_timestamp_closed {
             continue;
         }
 
-        let mut current_timestamp_ud = current_timestamp_ud.lock().unwrap();
-        if current_timestamp_closed > *current_timestamp_ud {
-            *current_timestamp_ud = current_timestamp_closed;
+        // ตรวจสอบ 3: อัพเดต timestamp ถ้าจำเป็น
+        let should_update = {
+            let current_ud = current_timestamp_ud.lock().unwrap();
+            current_timestamp_closed > *current_ud
+        }; // Guard ถูกปล่อยที่นี่
 
-            // Simple example strategy - you can replace this with your own logic
+        if should_update {
+            // อัพเดต timestamp
+            {
+                let mut current_ud = current_timestamp_ud.lock().unwrap();
+                *current_ud = current_timestamp_closed;
+            } // Guard ถูกปล่อยที่นี่
+
+            // ตอนนี้อัพเดตราคาโดยไม่ถือล็อคใดๆ
+            update_prices(history_data.clone(), data.close_price).await;
+
+            // คำนวณตัวบ่งชี้หลังการอัพเดต
+            let rsi = {
+                let history_vec = history_data
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<f64>>();
+                calculate_rsi(&history_vec, 14)
+            };
+            log::info!("RSI: {:?}", rsi);
+
+            let fast_ema = {
+                let history_vec = history_data
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<f64>>();
+                calculate_ema(&history_vec, 5)
+            };
+            log::info!("Fast EMA: {:?}", fast_ema);
+
+            let slow_ema = {
+                let history_vec = history_data
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<f64>>();
+                calculate_ema(&history_vec, 15)
+            };
+            log::info!("Slow EMA: {:?}", slow_ema);
+            log::info!("close price: {}", data.close_price);
+            {
+                let history_vec = history_data
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<f64>>();
+                log::info!("history_vec: {:?}", history_vec);
+            }
+            // ตรรกะสัญญาณของคุณ
             let signal = analyze_market_conditions(&data);
-            log::info!("current_timestamp_closed: {}", current_timestamp_closed);
-            log::info!("===== market_data : {:?} =====", data);
-            // if let Some(trading_signal) = signal {
-            //     if let Err(e) = signal_sender.send(trading_signal).await {
-            //         log::error!("Failed to send trading signal: {}", e);
-            //     }
-            // }
+            // ส่วนส่งสัญญาณถูกคอมเมนต์ไว้
         }
     }
 }

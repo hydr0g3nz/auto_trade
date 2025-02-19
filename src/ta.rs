@@ -79,16 +79,20 @@ pub fn calculate_ema(prices: &[f64], period: usize) -> Vec<f64> {
         return Vec::new();
     }
 
-    let multiplier = 2.0 / (period + 1) as f64;
-    let mut ema = Vec::with_capacity(prices.len());
+    // ใช้เฉพาะ n ตัวสุดท้าย โดย n = period
+    let start_idx = prices.len().saturating_sub(period);
+    let prices_to_use = &prices[start_idx..];
 
-    // Calculate first EMA using SMA
-    let first_sma = prices[0..period].iter().sum::<f64>() / period as f64;
+    let multiplier = 2.0 / (period + 1) as f64;
+    let mut ema = Vec::with_capacity(prices_to_use.len());
+
+    // คำนวณ EMA แรกโดยใช้ SMA ของข้อมูลที่เลือก
+    let first_sma = prices_to_use.iter().sum::<f64>() / prices_to_use.len() as f64;
     ema.push(first_sma);
 
-    // Calculate subsequent EMAs
-    for i in period..prices.len() {
-        let new_ema = (prices[i] - ema[ema.len() - 1]) * multiplier + ema[ema.len() - 1];
+    // คำนวณ EMA ถัดไป (ถ้ามีข้อมูลมากกว่า period)
+    for i in 1..prices_to_use.len() {
+        let new_ema = (prices_to_use[i] - ema[ema.len() - 1]) * multiplier + ema[ema.len() - 1];
         ema.push(new_ema);
     }
 
