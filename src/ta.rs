@@ -1,4 +1,4 @@
-use std::vec::Vec;
+use std::{collections::VecDeque, num::FpCategory, vec::Vec};
 
 // Calculate Simple Moving Average (SMA)
 pub fn calculate_sma(prices: &[f64], period: usize) -> Vec<f64> {
@@ -19,39 +19,43 @@ pub fn calculate_sma(prices: &[f64], period: usize) -> Vec<f64> {
 }
 
 // Calculate Relative Strength Index (RSI)
-pub fn calculate_rsi(prices: &[f64], period: usize) -> Vec<f64> {
-    if prices.len() <= period {
-        return Vec::new();
+pub fn calculate_rsi(prices: &[f64], period: usize) -> Option<f64> {
+    if prices.len() < period + 1 {
+        return None; // ต้องมีข้อมูลเพียงพอ
     }
 
-    let mut gains = Vec::with_capacity(prices.len() - 1);
-    let mut losses = Vec::with_capacity(prices.len() - 1);
+    let mut gains = vec![0.0; prices.len()];
+    let mut losses = vec![0.0; prices.len()];
 
-    // Calculate price changes
     for i in 1..prices.len() {
         let change = prices[i] - prices[i - 1];
-        gains.push(if change > 0.0 { change } else { 0.0 });
-        losses.push(if change < 0.0 { -change } else { 0.0 });
+        if change > 0.0 {
+            gains[i] = change;
+        } else {
+            losses[i] = -change;
+        }
     }
 
-    let mut rsi = Vec::with_capacity(prices.len() - period);
-    let mut avg_gain = gains[0..period].iter().sum::<f64>() / period as f64;
-    let mut avg_loss = losses[0..period].iter().sum::<f64>() / period as f64;
+    // คำนวณค่าเฉลี่ยแบบ SMA เป็นค่าตั้งต้นของ EMA
+    let mut avg_gain = gains.iter().skip(1).take(period).sum::<f64>() / period as f64;
+    let mut avg_loss = losses.iter().skip(1).take(period).sum::<f64>() / period as f64;
 
-    // Calculate initial RSI
-    let mut rs = avg_gain / avg_loss;
-    rsi.push(100.0 - (100.0 / (1.0 + rs)));
+    let smoothing_factor = 2.0 / (period as f64 + 1.0);
 
-    // Calculate subsequent RSI values
-    for i in period..gains.len() {
-        avg_gain = (avg_gain * (period - 1) as f64 + gains[i]) / period as f64;
-        avg_loss = (avg_loss * (period - 1) as f64 + losses[i]) / period as f64;
-        rs = avg_gain / avg_loss;
-        rsi.push(100.0 - (100.0 / (1.0 + rs)));
+    for i in (period + 1)..prices.len() {
+        avg_gain = (gains[i] * smoothing_factor) + (avg_gain * (1.0 - smoothing_factor));
+        avg_loss = (losses[i] * smoothing_factor) + (avg_loss * (1.0 - smoothing_factor));
     }
 
-    rsi
+    if avg_loss == 0.0 {
+        return Some(100.0);
+    }
+
+    let rs = avg_gain / avg_loss;
+    Some(100.0 - (100.0 / (1.0 + rs)))
 }
+
+
 
 // Calculate MACD (Moving Average Convergence Divergence)
 pub fn calculate_macd(

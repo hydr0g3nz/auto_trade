@@ -246,6 +246,7 @@ dependencies = [
  "log",
  "rust_decimal",
  "rust_decimal_macros",
+ "rust_ti",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -3111,6 +3112,12 @@ dependencies = [
  "quote",
  "rust_decimal",
 ]
+
+[[package]]
+name = "rust_ti"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "690394ab569341c204c8c6f62310e046a5f495747080b6e420a539cafd2d4f5e"
 
 [[package]]
 name = "rustc-demangle"

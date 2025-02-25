@@ -58,7 +58,7 @@ impl BinanceExchangeClient {
     }
     pub async fn start(&mut self) -> Result<(), dtoError> {
         let prices = self
-            .get_historical_prices(15)
+            .get_historical_prices(16)
             .await
             .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
         println!("Prices: {:?}", prices); //    self.update_prices()
@@ -72,10 +72,12 @@ impl BinanceExchangeClient {
         window_size: usize,
     ) -> Result<Vec<KlineResponse>, dtoError> {
         let data = self
-            .get_klines(KlineInterval::Hours1, window_size)
+            .get_klines(KlineInterval::Minutes1, window_size)
             .await
             .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
         self.price_data = Arc::new(Mutex::new(data.iter().map(|k| k.close_price).collect()));
+        self.price_data.lock().unwrap().pop_back();
+        println!("Historical prices: {:?}",&self.price_data);
         Ok(data)
     }
 
@@ -397,10 +399,8 @@ async fn analyze_price_data(
                 let mut current_ud = current_timestamp_ud.lock().unwrap();
                 *current_ud = current_timestamp_closed;
             } // Guard ถูกปล่อยที่นี่
-
             // ตอนนี้อัพเดตราคาโดยไม่ถือล็อคใดๆ
             update_prices(history_data.clone(), data.close_price).await;
-
             // คำนวณตัวบ่งชี้หลังการอัพเดต
             let rsi = {
                 let history_vec = history_data
@@ -409,7 +409,12 @@ async fn analyze_price_data(
                     .iter()
                     .copied()
                     .collect::<Vec<f64>>();
-                calculate_rsi(&history_vec, 14)
+                // calculate_rsi(&history_vec, 14)
+                rust_ti::momentum_indicators::bulk::relative_strength_index(
+                    &history_vec,
+                    &rust_ti::ConstantModelType::SimpleMovingAverage,
+                    &14,
+                )
             };
             log::info!("RSI: {:?}", rsi);
 
@@ -422,7 +427,7 @@ async fn analyze_price_data(
                     .collect::<Vec<f64>>();
                 calculate_ema(&history_vec, 5)
             };
-            log::info!("Fast EMA: {:?}", fast_ema);
+            // log::info!("Fast EMA: {:?}", fast_ema);
 
             let slow_ema = {
                 let history_vec = history_data
@@ -433,8 +438,8 @@ async fn analyze_price_data(
                     .collect::<Vec<f64>>();
                 calculate_ema(&history_vec, 15)
             };
-            log::info!("Slow EMA: {:?}", slow_ema);
-            log::info!("close price: {}", data.close_price);
+            // log::info!("Slow EMA: {:?}", slow_ema);
+            // log::info!("close price: {}", data.close_price);
             {
                 let history_vec = history_data
                     .lock()
@@ -442,7 +447,7 @@ async fn analyze_price_data(
                     .iter()
                     .copied()
                     .collect::<Vec<f64>>();
-                log::info!("history_vec: {:?}", history_vec);
+                // log::info!("history_vec: {:?}", history_vec);
             }
             // ตรรกะสัญญาณของคุณ
             let signal = analyze_market_conditions(&data);
