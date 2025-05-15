@@ -61,7 +61,7 @@ impl BinanceExchangeClient {
             .get_historical_prices(16)
             .await
             .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
-        println!("Prices: {:?}", prices); //    self.update_prices()
+        // println!("Prices: {:?}", prices); //    self.update_prices()
         Ok(())
     }
     pub async fn set_symbol(&mut self, symbol: String) {
@@ -76,8 +76,28 @@ impl BinanceExchangeClient {
             .await
             .map_err(|e| dtoError::HttpError(format!("{:?}", e)))?;
         self.price_data = Arc::new(Mutex::new(data.iter().map(|k| k.close_price).collect()));
-        self.price_data.lock().unwrap().pop_back();
-        println!("Historical prices: {:?}",&self.price_data);
+        {
+            self.price_data.lock().unwrap().pop_back();
+        }
+        let rsi = {
+            let history_vec = self
+                .price_data
+                .lock()
+                .unwrap()
+                .iter()
+                // .rev()
+                .copied()
+                .collect::<Vec<f64>>();
+            // calculate_rsi(&history_vec, 14)
+            // let test = history_vec.clone()[history_vec.len() - 15..].to_vec();
+            // println!("test: {:?}", test);
+            println!("test: {:?}", &history_vec);
+            rust_ti::momentum_indicators::bulk::relative_strength_index(
+                &history_vec,
+                &rust_ti::ConstantModelType::SimpleMovingAverage,&5,
+            )
+        };
+        println!("rsi {:?}",rsi);
         Ok(data)
     }
 
@@ -399,7 +419,7 @@ async fn analyze_price_data(
                 let mut current_ud = current_timestamp_ud.lock().unwrap();
                 *current_ud = current_timestamp_closed;
             } // Guard ถูกปล่อยที่นี่
-            // ตอนนี้อัพเดตราคาโดยไม่ถือล็อคใดๆ
+              // ตอนนี้อัพเดตราคาโดยไม่ถือล็อคใดๆ
             update_prices(history_data.clone(), data.close_price).await;
             // คำนวณตัวบ่งชี้หลังการอัพเดต
             let rsi = {
