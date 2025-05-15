@@ -1,6 +1,6 @@
-// src/domain/models.rs
 use rust_decimal::Decimal;
 use std::fmt;
+use chrono::{DateTime, Utc};
 
 /// Core Trading Components
 #[derive(Debug, Clone)]
@@ -11,6 +11,30 @@ pub struct Order {
     pub side: OrderSide,
     pub client_order_id: Option<String>,
     pub timestamp: i64,
+}
+
+impl Order {
+    pub fn new_market_order(symbol: &str, quantity: Decimal, side: OrderSide) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            quantity,
+            order_type: OrderType::Market,
+            side,
+            client_order_id: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
+    
+    pub fn new_limit_order(symbol: &str, quantity: Decimal, price: Decimal, side: OrderSide) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            quantity,
+            order_type: OrderType::Limit(price),
+            side,
+            client_order_id: None,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +67,16 @@ impl OrderSide {
         match self {
             OrderSide::Buy => "BUY",
             OrderSide::Sell => "SELL",
+        }
+    }
+}
+
+impl From<String> for OrderSide {
+    fn from(s: String) -> Self {
+        match s.to_uppercase().as_str() {
+            "BUY" => OrderSide::Buy,
+            "SELL" => OrderSide::Sell,
+            _ => OrderSide::Buy, // Default to Buy for unknown values
         }
     }
 }
@@ -117,6 +151,25 @@ pub struct MarketData {
     pub bid_price: Option<Decimal>,
     pub ask_price: Option<Decimal>,
     pub interval: Option<String>,
+}
+
+impl MarketData {
+    // Convert from the older f64-based representation
+    pub fn from_f64_based(md: &crate::domain::MarketData) -> Self {
+        Self {
+            symbol: md.symbol.clone(),
+            timestamp: md.timestamp as i64,
+            volume: Decimal::from_f64(md.volume),
+            last_price: Decimal::from_f64(md.last_price),
+            open_price: Decimal::from_f64(md.open_price),
+            close_price: Decimal::from_f64(md.close_price),
+            high_price: Decimal::from_f64(md.high_price),
+            low_price: Decimal::from_f64(md.low_price),
+            bid_price: None,
+            ask_price: None,
+            interval: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]

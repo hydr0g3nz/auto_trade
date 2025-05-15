@@ -1,4 +1,3 @@
-// src/analysis/indicators.rs
 use crate::domain::errors::{AnalysisError, AnalysisResult};
 use rust_decimal::Decimal;
 use std::collections::VecDeque;
@@ -226,69 +225,39 @@ pub fn calculate_atr(
     Ok(atr)
 }
 
-/// Stochastic Oscillator
-pub fn calculate_stochastic(
-    high_prices: &[f64],
-    low_prices: &[f64],
-    close_prices: &[f64],
-    k_period: usize,
-    d_period: usize
-) -> AnalysisResult<(Vec<f64>, Vec<f64>)> {
-    if high_prices.len() < k_period || low_prices.len() < k_period || close_prices.len() < k_period {
-        return Err(AnalysisError::InsufficientData(format!(
-            "Not enough data for Stochastic calculation. Need at least {} points, got {}",
-            k_period,
-            high_prices.len().min(low_prices.len()).min(close_prices.len())
-        )));
+// Backward compatibility functions with original ta.rs
+// These functions are simplified wrappers around the new error-handling functions
+
+/// Simple Moving Average (SMA) - Legacy version
+pub fn sma(prices: &[f64], period: usize) -> Vec<f64> {
+    match calculate_sma(prices, period) {
+        Ok(result) => result,
+        Err(_) => Vec::new(),
     }
-    
-    let mut k_values = Vec::with_capacity(close_prices.len() - k_period + 1);
-    
-    // Calculate %K values
-    for i in 0..=(close_prices.len() - k_period) {
-        let window_high = high_prices[i..(i + k_period)].iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let window_low = low_prices[i..(i + k_period)].iter().fold(f64::INFINITY, |a, &b| a.min(b));
-        let current_close = close_prices[i + k_period - 1];
-        
-        let k = if window_high - window_low > 0.0 {
-            100.0 * (current_close - window_low) / (window_high - window_low)
-        } else {
-            50.0 // Default value when range is zero
-        };
-        
-        k_values.push(k);
-    }
-    
-    // Calculate %D as SMA of %K
-    let d_values = calculate_sma(&k_values, d_period)?;
-    
-    Ok((k_values, d_values))
 }
 
-/// On-Balance Volume (OBV)
-pub fn calculate_obv(close_prices: &[f64], volumes: &[f64]) -> AnalysisResult<Vec<f64>> {
-    if close_prices.len() < 2 || volumes.len() < close_prices.len() {
-        return Err(AnalysisError::InsufficientData(format!(
-            "Not enough data for OBV calculation. Need at least 2 price points, got {}",
-            close_prices.len()
-        )));
+/// Exponential Moving Average (EMA) - Legacy version
+pub fn ema(prices: &[f64], period: usize) -> Vec<f64> {
+    match calculate_ema(prices, period) {
+        Ok(result) => result,
+        Err(_) => Vec::new(),
     }
-    
-    let mut obv = Vec::with_capacity(close_prices.len());
-    obv.push(volumes[0]); // Initial OBV is just the first volume
-    
-    for i in 1..close_prices.len() {
-        let previous_obv = obv[i-1];
-        let current_obv = if close_prices[i] > close_prices[i-1] {
-            previous_obv + volumes[i]
-        } else if close_prices[i] < close_prices[i-1] {
-            previous_obv - volumes[i]
-        } else {
-            previous_obv // No change if prices are equal
-        };
-        
-        obv.push(current_obv);
+}
+
+/// Relative Strength Index (RSI) - Legacy version
+pub fn rsi(prices: &[f64], period: usize) -> Option<f64> {
+    calculate_rsi(prices, period).ok()
+}
+
+/// MACD (Moving Average Convergence Divergence) - Legacy version
+pub fn macd(
+    prices: &[f64], 
+    fast_period: usize, 
+    slow_period: usize,
+    signal_period: usize
+) -> (Vec<f64>, Vec<f64>) {
+    match calculate_macd(prices, fast_period, slow_period, signal_period) {
+        Ok((macd_line, signal_line, _)) => (macd_line, signal_line),
+        Err(_) => (Vec::new(), Vec::new()),
     }
-    
-    Ok(obv)
 }
