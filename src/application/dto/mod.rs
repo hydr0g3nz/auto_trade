@@ -1,9 +1,13 @@
+// src/application/dto/mod.rs
+// Data Transfer Objects for the application layer
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
 use std::num::ParseFloatError;
 use thiserror::Error;
 
+// External API DTOs
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WebSocketResponse {
     pub stream: String,
@@ -58,9 +62,6 @@ pub struct Kline {
     pub taker_buy_quote_volume: String,
     #[serde(rename = "B")]
     pub ignore: String,
-}
-pub fn parse_websocket_message(message: &str) -> Result<WebSocketResponse, serde_json::Error> {
-    serde_json::from_str(message)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,15 +164,25 @@ pub struct TickerData {
     #[serde(rename = "n")]
     pub total_trades: i64,
 }
-pub fn parse_websocket_message_ticker(
-    message: &str,
-) -> Result<WebSocketMessage, serde_json::Error> {
-    // log::debug!("message ticker: {}", message);
-    serde_json::from_str(message)
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KlineResponse {
+    pub open_time: DateTime<Utc>,
+    pub open_price: f64,
+    pub high_price: f64,
+    pub low_price: f64,
+    pub close_price: f64,
+    pub volume: f64,
+    pub close_time: DateTime<Utc>,
+    pub quote_asset_volume: f64,
+    pub number_of_trades: u64,
+    pub taker_buy_base_volume: f64,
+    pub taker_buy_quote_volume: f64,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
+// Application error types
+#[derive(Debug, Error)]
+pub enum ApplicationError {
     #[error("API error: {0}")]
     ApiError(#[from] Box<dyn StdError + Send + Sync>),
 
@@ -189,71 +200,7 @@ pub enum Error {
 
     #[error("HTTP error: {0}")]
     HttpError(String),
-}
-
-impl From<hyper::Error> for Error {
-    fn from(err: hyper::Error) -> Self {
-        Error::RequestError(err.to_string())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KlineResponse {
-    pub open_time: DateTime<Utc>,
-    pub open_price: f64,
-    pub high_price: f64,
-    pub low_price: f64,
-    pub close_price: f64,
-    pub volume: f64,
-    pub close_time: DateTime<Utc>,
-    pub quote_asset_volume: f64,
-    pub number_of_trades: u64,
-    pub taker_buy_base_volume: f64,
-    pub taker_buy_quote_volume: f64,
-}
-
-impl KlineResponse {
-    pub fn from_raw_data(data: &[serde_json::Value]) -> Result<Self, Error> {
-        if data.len() < 11 {
-            return Err(Error::ParseError(format!(
-                "Invalid data length: expected 11 elements, got {}",
-                data.len()
-            )));
-        }
-
-        let parse_timestamp =
-            |value: &serde_json::Value, field: &str| -> Result<DateTime<Utc>, Error> {
-                value
-                    .as_i64()
-                    .ok_or_else(|| Error::ParseError(format!("Invalid {} format", field)))
-                    .and_then(|ts| {
-                        DateTime::from_timestamp_millis(ts).ok_or_else(|| {
-                            Error::ParseError(format!("Invalid timestamp for {}: {}", field, ts))
-                        })
-                    })
-            };
-
-        let parse_float = |value: &serde_json::Value, field: &str| -> Result<f64, Error> {
-            value
-                .as_str()
-                .ok_or_else(|| Error::ParseError(format!("Invalid {} format", field)))
-                .and_then(|s| s.parse().map_err(Error::NumberParseError))
-        };
-
-        Ok(Self {
-            open_time: parse_timestamp(&data[0], "open_time")?,
-            open_price: parse_float(&data[1], "open_price")?,
-            high_price: parse_float(&data[2], "high_price")?,
-            low_price: parse_float(&data[3], "low_price")?,
-            close_price: parse_float(&data[4], "close_price")?,
-            volume: parse_float(&data[5], "volume")?,
-            close_time: parse_timestamp(&data[6], "close_time")?,
-            quote_asset_volume: parse_float(&data[7], "quote_asset_volume")?,
-            number_of_trades: data[8]
-                .as_u64()
-                .ok_or_else(|| Error::ParseError("Invalid number_of_trades format".to_string()))?,
-            taker_buy_base_volume: parse_float(&data[9], "taker_buy_base_volume")?,
-            taker_buy_quote_volume: parse_float(&data[10], "taker_buy_quote_volume")?,
-        })
-    }
+    
+    #[error("Domain error: {0}")]
+    DomainError(String),
 }
