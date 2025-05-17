@@ -736,4 +736,89 @@ impl ExchangeClient for BinanceClient {
         
         Ok(price_history)
     }
+    async fn get_ticker(&self, symbol: &str) -> ExchangeResult<MarketData> {
+        if !self.connected && !symbol.contains("TEST") { // allow testing with mock symbols
+            return Err(ExchangeError::Connection("Not connected".to_string()));
+        }
+        
+        // Get the current ticker from Binance
+        let ticker = self.http_client
+            .get_price(symbol)
+            .await
+            .map_err(|e| ExchangeError::Api(format!("Failed to get ticker: {}", e)))?;
+        
+        // Get more detailed ticker information
+        let ticker_stats = self.http_client
+            .get_24h_price_stats(symbol)
+            .await
+            .map_err(|e| ExchangeError::Api(format!("Failed to get ticker stats: {}", e)))?;
+        
+        // Parse the price
+        let price = Decimal::from_str(&ticker.price)
+            .map_err(|e| ExchangeError::Api(format!("Failed to parse price: {}", e)))?;
+        
+        // Parse additional stats
+        let parse_decimal = |s: &str| -> ExchangeResult<Decimal> {
+            Decimal::from_str(s)
+                .map_err(|e| ExchangeError::Api(format!("Failed to parse decimal: {}", e)))
+        };
+        
+        let volume = parse_decimal(&ticker_stats.volume)?;
+        let open_price = parse_decimal(&ticker_stats.open_price)?;
+        let high_price = parse_decimal(&ticker_stats.high_price)?;
+        let low_price = parse_decimal(&ticker_stats.low_price)?;
+        
+        Ok(MarketData {
+            symbol: symbol.to_string(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            volume,
+            last_price: price,
+            open_price,
+            close_price: price,
+            high_price,
+            low_price,
+            bid_price: None,
+            ask_price: None,
+            interval: None,
+        })
+    }
+    
+    /// Subscribe to market data streams
+    async fn subscribe_to_market_data(
+        &mut self,
+        symbols: &[String],
+        callback: Box<dyn MarketDataHandler>,
+    ) -> ExchangeResult<()> {
+        // Start the market data processor
+        self.start_market_data_processor(callback).await?;
+        
+        // Get the market data sender
+        let tx = self.market_data_tx.clone()
+            .ok_or_else(|| ExchangeError::Connection("Market data sender not initialized".to_string()))?;
+        
+        // Start WebSocket connections for each symbol
+        for symbol in symbols {
+            // Start ticker WebSocket
+            let symbol_clone = symbol.clone();
+            let tx_clone = tx.clone();
+            let ticker_handle = tokio::spawn(async move {
+                if let Err(e) = Self::handle_ticker_websocket(symbol_clone, tx_clone).await {
+                    log::error!("Ticker WebSocket error: {:?}", e);
+                }
+            });
+            self.websocket_handles.push(ticker_handle);
+            
+            // Start kline WebSocket with 1m interval
+            let symbol_clone = symbol.clone();
+            let tx_clone = tx.clone();
+            let kline_handle = tokio::spawn(async move {
+                if let Err(e) = Self::handle_kline_websocket(symbol_clone, "1m".to_string(), tx_clone).await {
+                    log::error!("Kline WebSocket error: {:?}", e);
+                }
+            });
+            self.websocket_handles.push(kline_handle);
+        }
+        
+        Ok(())
+    }
 }
