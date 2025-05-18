@@ -39,3 +39,9 @@ pub trait TechnicalAnalysisService {
         signal_period: usize
     ) -> Result<(Vec<f64>, Vec<f64>), DomainError>;
 }
+
+#[async_trait]
+pub trait MarketDataSubscriber {
+    /// Subscribe to market data updates
+    async fn subscribe(&mut self) -> Result<MarketData, DomainError>;
+}
