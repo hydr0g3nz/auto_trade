@@ -425,7 +425,7 @@ impl SignalProcessor {
         }
     }
 
-    pub async fn start_processing<T: ExchangeClient + Send + 'static>(
+    pub async fn start_processing<T: ExchangeClient + Send+Sync + 'static>(
         &mut self,
         mut signal_rx: mpsc::Receiver<TradingSignal>,
         mut exchange: T,
@@ -902,15 +902,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut trading_bot = TradingBot::new(config, exchange_client);
 
     // Handle graceful shutdown
-    match trading_bot.start().await {
-        Ok(_) => {
-            log::info!("Trading bot finished successfully");
-        }
-        Err(e) => {
-            log::error!("Trading bot error: {:?}", e);
-            return Err(Box::new(e));
-        }
-    }
+      trading_bot.start().await?;
+    log::info!("Trading bot finished successfully");
 
     Ok(())
 }

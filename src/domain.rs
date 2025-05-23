@@ -89,12 +89,25 @@ pub enum TradingError {
 impl fmt::Display for TradingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TradingError::ConnectionError(msg) => write!(f, "Connection Error: {}", msg),
-            // Implement other variants
-            _ => write!(f, "Generic trading error"),
+            TradingError::ConnectionError(msg) => {
+                write!(f, "Failed to connect: {}", msg)
+            }
+            TradingError::AuthenticationError(msg) => {
+                write!(f, "Authentication failed: {}", msg)
+            }
+            TradingError::OrderError(msg) => {
+                write!(f, "Order execution failed: {}", msg)
+            }
+            TradingError::DataError(msg) => {
+                write!(f, "Data processing error: {}", msg)
+            }
+            TradingError::NetworkError(msg) => {
+                write!(f, "Network error: {}", msg)
+            }
         }
     }
 }
+
 
 impl Error for TradingError {}
 
