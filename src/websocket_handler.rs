@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use crate::dto::{parse_websocket_message, parse_websocket_message_ticker, Kline, TickerData};
 use crate::domain::TradingError;
-
+#[derive(Clone)]
 pub struct WebSocketHandler {
     symbol: String,
 }

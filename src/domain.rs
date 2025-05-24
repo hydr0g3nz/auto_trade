@@ -112,6 +112,7 @@ impl fmt::Display for TradingError {
 impl Error for TradingError {}
 
 /// Core Trading Traits
+#[async_trait::async_trait]
 pub trait ExchangeClient {
     async fn connect(&mut self) -> Result<(), TradingError>;
     async fn disconnect(&mut self) -> Result<(), TradingError>;

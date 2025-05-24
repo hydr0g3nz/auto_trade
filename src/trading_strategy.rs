@@ -1,7 +1,8 @@
-use crate::domain::{MarketData, TradingSignal, TradeAction};
 use crate::config::TradingConfig;
-use crate::ta::{calculate_rsi, calculate_ema};
+use crate::domain::{MarketData, TradeAction, TradingSignal};
+use crate::ta::{calculate_ema, calculate_rsi};
 
+#[derive(Clone)]
 pub struct TradingStrategy {
     config: TradingConfig,
 }
@@ -11,7 +12,11 @@ impl TradingStrategy {
         Self { config }
     }
 
-    pub fn analyze(&self, market_data: &MarketData, price_history: &[f64]) -> Option<TradingSignal> {
+    pub fn analyze(
+        &self,
+        market_data: &MarketData,
+        price_history: &[f64],
+    ) -> Option<TradingSignal> {
         if price_history.len() < self.config.rsi_period.max(self.config.ema_slow_period) {
             return None;
         }
@@ -39,7 +44,11 @@ impl TradingStrategy {
         }
     }
 
-    fn determine_action(&self, market_data: &MarketData, indicators: &TradingIndicators) -> TradeAction {
+    fn determine_action(
+        &self,
+        market_data: &MarketData,
+        indicators: &TradingIndicators,
+    ) -> TradeAction {
         let price_change_pct = if market_data.open_price != 0.0 {
             ((market_data.last_price - market_data.open_price) / market_data.open_price) * 100.0
         } else {
@@ -51,7 +60,8 @@ impl TradingStrategy {
             (Some(rsi), Some(fast), Some(slow)) => {
                 if price_change_pct < self.config.buy_threshold && rsi < 30.0 && fast > slow {
                     TradeAction::Buy
-                } else if price_change_pct > self.config.sell_threshold && rsi > 70.0 && fast < slow {
+                } else if price_change_pct > self.config.sell_threshold && rsi > 70.0 && fast < slow
+                {
                     TradeAction::Sell
                 } else {
                     TradeAction::Hold
